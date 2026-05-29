@@ -18,3 +18,5 @@
 * `web_ui.py`: Streamlit 기반 프론트엔드 및 사용자 인터랙션 로직
 * `search_dart_corp.py`: DART OpenAPI 파싱 및 엑셀 다운로드 핵심 라이브러리 모듈
 * `requirements.txt`: Streamlit Cloud 환경에서 설치할 종속성 리스트
+
+* thx to https://github.com/josw123/dart-fss
