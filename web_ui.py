@@ -135,6 +135,35 @@ def _remove_corp(code: str):
     st.session_state.reports_cache.pop(code, None)
 
 
+def _download_report_ui(corp_name: str, corp_code: str, rcept_no: str, report_nm: str):
+    """공시 보고서 원본을 다운로드하여 세션 상태에 저장하는 UI 헬퍼 함수."""
+    try:
+        set_api_key(st.session_state.api_key or None)
+        save_dir_name = st.session_state.get("batch_save_dir", DEFAULT_SAVE_DIR)
+        save_dir = os.path.join(SCRIPT_DIR, save_dir_name)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        safe_corp_name = _safe_filename(corp_name)
+        safe_report_nm = _safe_filename(report_nm)
+        save_path = os.path.join(save_dir, f"{safe_corp_name}_{safe_report_nm}_{rcept_no}.zip")
+        
+        with st.spinner("원본 문서 다운로드 중..."):
+            saved_filepath = download_original_document(
+                rcept_no=rcept_no,
+                save_path=save_path,
+                api_key=st.session_state.api_key or None
+            )
+        
+        if "downloaded_docs" not in st.session_state:
+            st.session_state.downloaded_docs = {}
+        st.session_state.downloaded_docs[rcept_no] = saved_filepath
+        st.session_state.active_expander = corp_code
+        st.toast(f"✅ 다운로드 완료: {os.path.basename(saved_filepath)}")
+        st.rerun()
+    except Exception as err:
+        st.error(f"다운로드 실패: {err}")
+
+
 # ---------------------------------------------------------------------------
 # 사이드바 — API 키 / 기업 검색 / 선택
 # ---------------------------------------------------------------------------
@@ -294,35 +323,6 @@ def _render_tab_selected():
             st.rerun()
 
 
-
-def _download_report_ui(corp_name: str, rcept_no: str, report_nm: str):
-    """공시 보고서 원본을 다운로드하여 세션 상태에 저장하는 UI 헬퍼 함수."""
-    try:
-        set_api_key(st.session_state.api_key or None)
-        save_dir_name = st.session_state.get("batch_save_dir", DEFAULT_SAVE_DIR)
-        save_dir = os.path.join(SCRIPT_DIR, save_dir_name)
-        os.makedirs(save_dir, exist_ok=True)
-        
-        safe_corp_name = _safe_filename(corp_name)
-        safe_report_nm = _safe_filename(report_nm)
-        save_path = os.path.join(save_dir, f"{safe_corp_name}_{safe_report_nm}_{rcept_no}.zip")
-        
-        with st.spinner("원본 문서 다운로드 중..."):
-            saved_filepath = download_original_document(
-                rcept_no=rcept_no,
-                save_path=save_path,
-                api_key=st.session_state.api_key or None
-            )
-        
-        if "downloaded_docs" not in st.session_state:
-            st.session_state.downloaded_docs = {}
-        st.session_state.downloaded_docs[rcept_no] = saved_filepath
-        st.toast(f"✅ 다운로드 완료: {os.path.basename(saved_filepath)}")
-        st.rerun()
-    except Exception as err:
-        st.error(f"다운로드 실패: {err}")
-
-
 # ---------------------------------------------------------------------------
 # 탭 2 — 공시정보 조회
 # ---------------------------------------------------------------------------
@@ -350,6 +350,7 @@ def _render_tab_reports():
         )
 
     if st.button("📥 공시 보고서 조회", use_container_width=True):
+        st.session_state.active_expander = None
         bgn_str = bgn.strftime("%Y%m%d")
         end_str = end.strftime("%Y%m%d")
 
@@ -384,50 +385,95 @@ def _render_tab_reports():
             reports = st.session_state.reports_cache.get(code)
             if reports is None:
                 continue
-            with st.expander(f"📄 {name} ({code}) — {len(reports)}건", expanded=False):
+            
+            # Determine if this expander should be expanded (preserve state on rerun)
+            df_sel_key = f"df_select_{code}"
+            is_selected = False
+            if df_sel_key in st.session_state:
+                sel = st.session_state[df_sel_key]
+                if isinstance(sel, dict) and sel.get("selection", {}).get("rows"):
+                    is_selected = True
+            
+            is_active = (st.session_state.get("active_expander") == code)
+            should_expand = is_selected or is_active
+            
+            with st.expander(f"📄 {name} ({code}) — {len(reports)}건", expanded=should_expand):
                 if not reports:
                     st.write("해당 기간 보고서 없음")
                 else:
                     import pandas as pd
-                    df = pd.DataFrame(reports)
-                    st.dataframe(df, use_container_width=True)
+                    # 복사본을 만들어 원본 데이터 훼손 방지 및 공시 뷰어 링크 추가
+                    df = pd.DataFrame(reports).copy()
+                    df["공시 뷰어"] = df["rcept_no"].apply(lambda rcp: f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcp}")
                     
-                    st.markdown("#### 📂 공시 원본보고서 개별 다운로드")
-                    st.caption("아래 목록에서 원문 보고서(ZIP)를 다운로드해 로컬 서버에 저장하고, 브라우저 다운로드 버튼을 활성화합니다.")
+                    # 불필요한 컬럼 삭제 (보고서코드, 시작일, 종료일)
+                    cols_to_drop = ["reprt_code", "bgn_de", "end_de"]
+                    df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors="ignore")
                     
-                    for idx, report in enumerate(reports):
-                        rcept_no = report.get("rcept_no")
-                        report_nm = report.get("report_nm")
-                        bgn_de = report.get("bgn_de", "N/A")
-                        
-                        col_r1, col_r2, col_r3 = st.columns([5, 2, 2])
-                        col_r1.markdown(f"**{idx+1}. {report_nm}**")
-                        col_r2.caption(f"접수번호: `{rcept_no}`\n일자: {bgn_de}")
-                        
-                        if "downloaded_docs" not in st.session_state:
-                            st.session_state.downloaded_docs = {}
+                    st.markdown("#### 📂 공시 뷰어 바로가기")
+                    
+                    # 데이터프레임 컬럼 시각화 커스텀 설정 (표 내부에 클릭 뷰어 삽입)
+                    column_config = {
+                        "공시 뷰어": st.column_config.LinkColumn(
+                            "🌐 뷰어 바로가기",
+                            help="클릭하시면 금융감독원 DART 공시 뷰어 새 창이 열립니다.",
+                            validate="^https://.*",
+                            display_text="🌐 열기"
+                        ),
+                        "rcept_no": st.column_config.TextColumn("접수번호"),
+                        "report_nm": st.column_config.TextColumn("보고서명"),
+                        "corp_name": st.column_config.TextColumn("회사명"),
+                    }
+                    
+                    # Fallback check for on_select support in st.dataframe (Streamlit 1.35.0+)
+                    import inspect
+                    has_on_select = "on_select" in inspect.signature(st.dataframe).parameters
+                    
+                    selected_report = None
+                    
+                    if has_on_select:
+                        st.caption("💡 아래 표의 **'🌐 뷰어 바로가기'** 링크를 클릭하거나, **행(Row)**을 선택하시면 즉시 뷰어를 열 수 있습니다.")
+                        event = st.dataframe(
+                            df,
+                            column_config=column_config,
+                            use_container_width=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key=f"df_select_{code}"
+                        )
+                        selected_rows = event.selection.get("rows", [])
+                        if selected_rows:
+                            selected_report = reports[selected_rows[0]]
+                    else:
+                        # Fallback for older Streamlit versions
+                        st.dataframe(df, column_config=column_config, use_container_width=True)
+                        st.caption("💡 표의 '🌐 열기' 링크를 누르시거나, 아래 셀렉트박스에서 보고서를 선택하여 바로가실 수 있습니다.")
+                        report_options = [f"{idx+1}. {r.get('report_nm')} ({r.get('rcept_no')})" for idx, r in enumerate(reports)]
+                        sel_idx = st.selectbox(
+                            "바로가기 선택",
+                            options=range(len(reports)),
+                            format_func=lambda i: report_options[i],
+                            key=f"sb_select_{code}"
+                        )
+                        if sel_idx is not None:
+                            selected_report = reports[sel_idx]
                             
-                        btn_key = f"btn_dl_{rcept_no}"
+                    # 선택된 보고서 공시 뷰어 바로가기 단축 버튼 노출
+                    if selected_report:
+                        rcept_no = selected_report.get("rcept_no")
+                        report_nm = selected_report.get("report_nm")
+                        bgn_de = selected_report.get("bgn_de", "N/A")
                         
-                        if rcept_no in st.session_state.downloaded_docs:
-                            saved_filepath = st.session_state.downloaded_docs[rcept_no]
-                            if os.path.exists(saved_filepath):
-                                with open(saved_filepath, "rb") as f:
-                                    col_r3.download_button(
-                                        label="⬇️ 브라우저 저장",
-                                        data=f.read(),
-                                        file_name=os.path.basename(saved_filepath),
-                                        mime="application/zip",
-                                        key=f"web_dl_{rcept_no}",
-                                        use_container_width=True,
-                                    )
-                            else:
-                                del st.session_state.downloaded_docs[rcept_no]
-                                if col_r3.button("📥 원본 다운로드", key=btn_key, use_container_width=True):
-                                    _download_report_ui(name, rcept_no, report_nm)
-                        else:
-                            if col_r3.button("📥 원본 다운로드", key=btn_key, use_container_width=True):
-                                _download_report_ui(name, rcept_no, report_nm)
+                        st.markdown(f"##### 🎯 선택된 보고서: **{report_nm}**")
+                        
+                        col_dl1, col_dl2 = st.columns([3, 2])
+                        col_dl1.caption(f"접수번호: `{rcept_no}` | 공시일자: `{bgn_de}`")
+                        
+                        col_dl2.link_button(
+                            label="🌐 FSS DART 공시 뷰어 열기 (새 창)",
+                            url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
+                            use_container_width=True,
+                        )
 
 
 # ---------------------------------------------------------------------------
