@@ -16,51 +16,8 @@
 
 ---
 
-## 🛠️ 로컬 설치 및 실행 방법
-
-### 1. 가상환경 구성 및 패키지 설치
-```bash
-# 가상환경 생성 및 활성화 (Windows 기준)
-python -m venv .venv
-.venv\Scripts\activate
-
-# 의존성 패키지 설치
-pip install -r requirements.txt
-```
-
-### 2. 어플리케이션 실행
-```bash
-streamlit run web_ui.py
-```
-실행 후 브라우저에서 `http://localhost:8501`로 자동 연결됩니다.
-
----
-
-## ☁️ Streamlit Community Cloud 배포 가이드
-
-1. **GitHub 저장소 생성 및 푸시**:
-   - `.gitignore` 설정에 따라 `.venv`, `__pycache__`, `corp_list_cache.json` 및 추출된 엑셀 파일 폴더(`fsdata/`, `samsung/`) 등은 업로드에서 제외됩니다.
-   - 저장소에는 아래 **필수 파일**들만 업로드하면 됩니다.
-
-2. **Streamlit Cloud 로그인**:
-   - [Streamlit Community Cloud](https://share.streamlit.io/)에 접속하여 GitHub 계정으로 로그인합니다.
-
-3. **New App 배포**:
-   - `Repository`, `Branch`, `Main file path`를 입력합니다.
-     - **Main file path**: `web_ui.py`
-   - **Advanced settings** (중요):
-     - `DART_API_KEY` 환경 변수를 사용하거나 Secrets 탭에 API 키를 사전 설정할 수 있습니다. 
-     - 예시 (Secrets 탭 설정):
-       ```toml
-       DART_API_KEY = "내_DART_API_키_값"
-       ```
-
-4. **Deploy!** 버튼을 누르면 패키지(`requirements.txt`) 자동 설치 후 몇 분 내에 온라인에 배포가 완료됩니다.
-
----
 
 ## 📂 파일 구조
 * `web_ui.py`: Streamlit 기반 프론트엔드 및 사용자 인터랙션 로직
 * `search_dart_corp.py`: DART OpenAPI 파싱 및 엑셀 다운로드 핵심 라이브러리 모듈
 * `requirements.txt`: Streamlit Cloud 환경에서 설치할 종속성 리스트
-* `.gitignore`: 무겁거나 보안이 필요한 임시 파일 업로드 방지 파일
