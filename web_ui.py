@@ -47,6 +47,7 @@ from search_dart_corp import (
     get_available_financial_reports,
     search_corp_keyword,
     set_api_key,
+    download_original_document,
 )
 
 # ---------------------------------------------------------------------------
@@ -293,6 +294,35 @@ def _render_tab_selected():
             st.rerun()
 
 
+
+def _download_report_ui(corp_name: str, rcept_no: str, report_nm: str):
+    """공시 보고서 원본을 다운로드하여 세션 상태에 저장하는 UI 헬퍼 함수."""
+    try:
+        set_api_key(st.session_state.api_key or None)
+        save_dir_name = st.session_state.get("batch_save_dir", DEFAULT_SAVE_DIR)
+        save_dir = os.path.join(SCRIPT_DIR, save_dir_name)
+        os.makedirs(save_dir, exist_ok=True)
+        
+        safe_corp_name = _safe_filename(corp_name)
+        safe_report_nm = _safe_filename(report_nm)
+        save_path = os.path.join(save_dir, f"{safe_corp_name}_{safe_report_nm}_{rcept_no}.zip")
+        
+        with st.spinner("원본 문서 다운로드 중..."):
+            saved_filepath = download_original_document(
+                rcept_no=rcept_no,
+                save_path=save_path,
+                api_key=st.session_state.api_key or None
+            )
+        
+        if "downloaded_docs" not in st.session_state:
+            st.session_state.downloaded_docs = {}
+        st.session_state.downloaded_docs[rcept_no] = saved_filepath
+        st.toast(f"✅ 다운로드 완료: {os.path.basename(saved_filepath)}")
+        st.rerun()
+    except Exception as err:
+        st.error(f"다운로드 실패: {err}")
+
+
 # ---------------------------------------------------------------------------
 # 탭 2 — 공시정보 조회
 # ---------------------------------------------------------------------------
@@ -361,6 +391,43 @@ def _render_tab_reports():
                     import pandas as pd
                     df = pd.DataFrame(reports)
                     st.dataframe(df, use_container_width=True)
+                    
+                    st.markdown("#### 📂 공시 원본보고서 개별 다운로드")
+                    st.caption("아래 목록에서 원문 보고서(ZIP)를 다운로드해 로컬 서버에 저장하고, 브라우저 다운로드 버튼을 활성화합니다.")
+                    
+                    for idx, report in enumerate(reports):
+                        rcept_no = report.get("rcept_no")
+                        report_nm = report.get("report_nm")
+                        bgn_de = report.get("bgn_de", "N/A")
+                        
+                        col_r1, col_r2, col_r3 = st.columns([5, 2, 2])
+                        col_r1.markdown(f"**{idx+1}. {report_nm}**")
+                        col_r2.caption(f"접수번호: `{rcept_no}`\n일자: {bgn_de}")
+                        
+                        if "downloaded_docs" not in st.session_state:
+                            st.session_state.downloaded_docs = {}
+                            
+                        btn_key = f"btn_dl_{rcept_no}"
+                        
+                        if rcept_no in st.session_state.downloaded_docs:
+                            saved_filepath = st.session_state.downloaded_docs[rcept_no]
+                            if os.path.exists(saved_filepath):
+                                with open(saved_filepath, "rb") as f:
+                                    col_r3.download_button(
+                                        label="⬇️ 브라우저 저장",
+                                        data=f.read(),
+                                        file_name=os.path.basename(saved_filepath),
+                                        mime="application/zip",
+                                        key=f"web_dl_{rcept_no}",
+                                        use_container_width=True,
+                                    )
+                            else:
+                                del st.session_state.downloaded_docs[rcept_no]
+                                if col_r3.button("📥 원본 다운로드", key=btn_key, use_container_width=True):
+                                    _download_report_ui(name, rcept_no, report_nm)
+                        else:
+                            if col_r3.button("📥 원본 다운로드", key=btn_key, use_container_width=True):
+                                _download_report_ui(name, rcept_no, report_nm)
 
 
 # ---------------------------------------------------------------------------
