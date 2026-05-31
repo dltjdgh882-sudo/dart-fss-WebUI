@@ -1,6 +1,6 @@
 """
 =============================================================================
-DART 기업 재무제표 일괄 검색 / 다운로드 Web UI  (Streamlit)
+DART 기업 공시정보 일괄 검색 / 다운로드 Web UI  (Streamlit)
 =============================================================================
 search_dart_corp.py 를 import 하여 GUI 환경에서 다음 기능을 제공합니다.
 
@@ -77,6 +77,20 @@ MARKET_TO_DART_CODE = {
     "KNX": "N",
     "ETC": "E",
 }
+# DART API 공시유형 코드 매핑
+PBLNTF_TY_LABELS = {
+    "전체 (All)": None,
+    "정기공시 (A)": "A",
+    "주요사항보고 (B)": "B",
+    "발행공시 (C)": "C",
+    "지분공시 (D)": "D",
+    "기타공시 (E)": "E",
+    "외부감사관련 (F)": "F",
+    "펀드공시 (G)": "G",
+    "자산유동화 (H)": "H",
+    "거래소공시 (I)": "I",
+    "공정위공시 (J)": "J",
+}
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_SAVE_DIR = "fsdata"
 
@@ -90,11 +104,13 @@ def _init_session():
         "api_key": os.environ.get("DART_API_KEY") or DEFAULT_API_KEY or "",
         "search_keyword": "",
         "search_results": [],          # List[Dict]
-        "selected_corps": [],           # List[Dict]  — 선택된 기업 목록
+        "selected_corps": [],           # List[Dict]  — 검색대상 기업 선택
         "batch_logs": [],               # List[str]   — 일괄 다운로드 로그
         "batch_running": False,
         "batch_files": [],              # List[Tuple[str, str]]  — (표시명, 절대경로)
         "reports_cache": {},            # corp_code -> List[Dict]
+        "selected_reports_by_corp": {}, # corp_code -> pd.DataFrame
+        "xml_batch_zip_path": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -139,8 +155,7 @@ def _download_report_ui(corp_name: str, corp_code: str, rcept_no: str, report_nm
     """공시 보고서 원본을 다운로드하여 세션 상태에 저장하는 UI 헬퍼 함수."""
     try:
         set_api_key(st.session_state.api_key or None)
-        save_dir_name = st.session_state.get("batch_save_dir", DEFAULT_SAVE_DIR)
-        save_dir = os.path.join(SCRIPT_DIR, save_dir_name)
+        save_dir = os.path.join(SCRIPT_DIR, DEFAULT_SAVE_DIR)
         os.makedirs(save_dir, exist_ok=True)
         
         safe_corp_name = _safe_filename(corp_name)
@@ -158,6 +173,7 @@ def _download_report_ui(corp_name: str, corp_code: str, rcept_no: str, report_nm
             st.session_state.downloaded_docs = {}
         st.session_state.downloaded_docs[rcept_no] = saved_filepath
         st.session_state.active_expander = corp_code
+        st.session_state[f"expander_{corp_code}"] = True
         st.toast(f"✅ 다운로드 완료: {os.path.basename(saved_filepath)}")
         st.rerun()
     except Exception as err:
@@ -292,7 +308,7 @@ def _do_search(active_markets: List[str] = None):
 # ---------------------------------------------------------------------------
 
 def _render_tab_selected():
-    st.markdown("### 📋 선택된 기업 목록")
+    st.markdown("### 📋 검색대상 기업 선택")
 
     corps = st.session_state.selected_corps
     if not corps:
@@ -309,7 +325,17 @@ def _render_tab_selected():
     with col_top2:
         st.markdown(f"**총 {len(corps)}개 기업**")
 
-    # 기업 목록 테이블
+    # 기업 목록 테이블 헤더 추가
+    st.divider()
+    h_name, h_code, h_stock, h_cls, h_del = st.columns([3, 2, 2, 1, 1])
+    h_name.markdown("**🏢 기업명**")
+    h_code.markdown("**🔑 DART 코드**")
+    h_stock.markdown("**📈 종목코드**")
+    h_cls.markdown("**🏛️ 시장구분**")
+    h_del.markdown("**❌ 삭제**")
+    st.divider()
+
+    # 기업 목록 테이블 데이터 행
     for idx, corp in enumerate(corps):
         col_name, col_code, col_stock, col_cls, col_del = st.columns(
             [3, 2, 2, 1, 1]
@@ -317,8 +343,12 @@ def _render_tab_selected():
         col_name.markdown(f"**{corp['corp_name']}**")
         col_code.code(corp["corp_code"])
         col_stock.write(corp.get("stock_code") or "—")
-        col_cls.write(corp.get("corp_cls") or "—")
-        if col_del.button("❌", key=f"del_{corp['corp_code']}"):
+        # 시장구분 코드 변환 (Y->KSP, K->KDQ, N->KNX, E->ETC)
+        raw_cls = corp.get("corp_cls") or ""
+        cls_mapping = {"Y": "KSP", "K": "KDQ", "N": "KNX", "E": "ETC"}
+        display_cls = cls_mapping.get(raw_cls, raw_cls) or "—"
+        col_cls.write(display_cls)
+        if col_del.button("❌", key=f"del_{corp['corp_code']}", use_container_width=True):
             _remove_corp(corp["corp_code"])
             st.rerun()
 
@@ -328,14 +358,19 @@ def _render_tab_selected():
 # ---------------------------------------------------------------------------
 
 def _render_tab_reports():
-    st.markdown("### 📊 공시정보 일괄 조회")
+    if "selected_reports_by_corp" not in st.session_state:
+        st.session_state.selected_reports_by_corp = {}
+    if "xml_batch_zip_path" not in st.session_state:
+        st.session_state.xml_batch_zip_path = None
+
+    st.markdown("### 📊 공시정보 원본 조회")
 
     corps = st.session_state.selected_corps
     if not corps:
         st.info("먼저 기업을 선택하세요.")
         return
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
     with col1:
         bgn = st.date_input(
             "조회 시작일",
@@ -348,9 +383,22 @@ def _render_tab_reports():
             value=date.today(),
             key="report_end",
         )
+    with col3:
+        pblntf_ty_sel = st.selectbox(
+            "공시 유형",
+            options=list(PBLNTF_TY_LABELS.keys()),
+            key="report_pblntf_ty",
+            help="검색할 공시 서류의 대분류 유형입니다.",
+        )
+        pblntf_ty_code = PBLNTF_TY_LABELS[pblntf_ty_sel]
 
-    if st.button("📥 공시 보고서 조회", use_container_width=True):
+    if st.button("📥 공시 보고서 조회(기업별 최대 100건/1회)", use_container_width=True):
         st.session_state.active_expander = None
+        st.session_state.xml_batch_zip_path = None
+        st.session_state.selected_reports_by_corp = {}
+        for key in list(st.session_state.keys()):
+            if key.startswith("df_editor_") or key.startswith("expander_"):
+                del st.session_state[key]
         bgn_str = bgn.strftime("%Y%m%d")
         end_str = end.strftime("%Y%m%d")
 
@@ -369,6 +417,7 @@ def _render_tab_reports():
                 reports = get_available_financial_reports(
                     code, bgn_str, end_str,
                     api_key=st.session_state.api_key or None,
+                    pblntf_ty=pblntf_ty_code,
                 )
                 st.session_state.reports_cache[code] = reports or []
             except Exception as err:
@@ -386,18 +435,13 @@ def _render_tab_reports():
             if reports is None:
                 continue
             
-            # Determine if this expander should be expanded (preserve state on rerun)
-            df_sel_key = f"df_select_{code}"
-            is_selected = False
-            if df_sel_key in st.session_state:
-                sel = st.session_state[df_sel_key]
-                if isinstance(sel, dict) and sel.get("selection", {}).get("rows"):
-                    is_selected = True
-            
-            is_active = (st.session_state.get("active_expander") == code)
-            should_expand = is_selected or is_active
-            
-            with st.expander(f"📄 {name} ({code}) — {len(reports)}건", expanded=should_expand):
+            # key 매개변수를 지정하여 expander의 열림/닫힘 상태를 st.session_state[f"expander_{code}"]와 자동으로 동기화합니다.
+            # Rerun(체크박스 클릭 등) 시에도 사용자가 조작한 상태가 완전히 그대로 보존됩니다.
+            expander_ctx = st.expander(
+                f"📄 {name} ({code}) — {len(reports)}건", 
+                key=f"expander_{code}"
+            )
+            with expander_ctx:
                 if not reports:
                     st.write("해당 기간 보고서 없음")
                 else:
@@ -410,9 +454,12 @@ def _render_tab_reports():
                     cols_to_drop = ["reprt_code", "bgn_de", "end_de"]
                     df = df.drop(columns=[c for c in cols_to_drop if c in df.columns], errors="ignore")
                     
-                    st.markdown("#### 📂 공시 뷰어 바로가기")
+                    # 1. 뷰어 바로가기 오른쪽에 체크박스 열(선택) 추가
+                    df["선택"] = False
                     
-                    # 데이터프레임 컬럼 시각화 커스텀 설정 (표 내부에 클릭 뷰어 삽입)
+                    st.markdown("#### 📂 공시 목록 및 원문 다운로드 선택")
+                    
+                    # 데이터프레임 컬럼 시각화 커스텀 설정 (표 내부에 클릭 뷰어 삽입 및 체크박스 열 추가)
                     column_config = {
                         "공시 뷰어": st.column_config.LinkColumn(
                             "🌐 뷰어 바로가기",
@@ -423,65 +470,143 @@ def _render_tab_reports():
                         "rcept_no": st.column_config.TextColumn("접수번호"),
                         "report_nm": st.column_config.TextColumn("보고서명"),
                         "corp_name": st.column_config.TextColumn("회사명"),
+                        "선택": st.column_config.CheckboxColumn(
+                            "선택",
+                            help="체크 시 하단에서 일괄 다운로드 할 수 있습니다.",
+                            default=False
+                        )
                     }
                     
-                    # Fallback check for on_select support in st.dataframe (Streamlit 1.35.0+)
-                    import inspect
-                    has_on_select = "on_select" in inspect.signature(st.dataframe).parameters
+                    # st.data_editor를 사용하여 체크박스 선택 허용
+                    edited_df = st.data_editor(
+                        df,
+                        column_config=column_config,
+                        use_container_width=True,
+                        disabled=["rcept_no", "report_nm", "corp_name", "공시 뷰어"],
+                        key=f"df_editor_{code}"
+                    )
                     
-                    selected_report = None
-                    
-                    if has_on_select:
-                        st.caption("💡 아래 표의 **'🌐 뷰어 바로가기'** 링크를 클릭하거나, **행(Row)**을 선택하시면 즉시 뷰어를 열 수 있습니다.")
-                        event = st.dataframe(
-                            df,
-                            column_config=column_config,
-                            use_container_width=True,
-                            on_select="rerun",
-                            selection_mode="single-row",
-                            key=f"df_select_{code}"
-                        )
-                        selected_rows = event.selection.get("rows", [])
-                        if selected_rows:
-                            selected_report = reports[selected_rows[0]]
-                    else:
-                        # Fallback for older Streamlit versions
-                        st.dataframe(df, column_config=column_config, use_container_width=True)
-                        st.caption("💡 표의 '🌐 열기' 링크를 누르시거나, 아래 셀렉트박스에서 보고서를 선택하여 바로가실 수 있습니다.")
-                        report_options = [f"{idx+1}. {r.get('report_nm')} ({r.get('rcept_no')})" for idx, r in enumerate(reports)]
-                        sel_idx = st.selectbox(
-                            "바로가기 선택",
-                            options=range(len(reports)),
-                            format_func=lambda i: report_options[i],
-                            key=f"sb_select_{code}"
-                        )
-                        if sel_idx is not None:
-                            selected_report = reports[sel_idx]
-                            
-                    # 선택된 보고서 공시 뷰어 바로가기 단축 버튼 노출
-                    if selected_report:
-                        rcept_no = selected_report.get("rcept_no")
-                        report_nm = selected_report.get("report_nm")
-                        bgn_de = selected_report.get("bgn_de", "N/A")
-                        
-                        st.markdown(f"##### 🎯 선택된 보고서: **{report_nm}**")
-                        
-                        col_dl1, col_dl2 = st.columns([3, 2])
-                        col_dl1.caption(f"접수번호: `{rcept_no}` | 공시일자: `{bgn_de}`")
-                        
-                        col_dl2.link_button(
-                            label="🌐 FSS DART 공시 뷰어 열기 (새 창)",
-                            url=f"https://dart.fss.or.kr/dsaf001/main.do?rcpNo={rcept_no}",
-                            use_container_width=True,
-                        )
+                    # 세션에 편집 정보 저장
+                    st.session_state.selected_reports_by_corp[code] = edited_df
 
+        # --- 공시정보 원문(XML) 일괄 다운로드 영역 ---
+        st.divider()
+        st.markdown("### 📥 공시정보 원문(XML) 일괄 다운로드")
+        st.caption("위의 공시 목록 표에서 **'선택'** 체크박스를 체크한 보고서들의 원문(XML) ZIP 파일들을 한 번에 일괄 다운로드하여 하나의 ZIP 파일로 결합합니다.")
+        
+        # 선택된 보고서 목록 수집
+        selected_items = []
+        if "selected_reports_by_corp" in st.session_state:
+            for c_code, ed_df in st.session_state.selected_reports_by_corp.items():
+                if ed_df is not None and "선택" in ed_df.columns:
+                    checked_rows = ed_df[ed_df["선택"] == True]
+                    for _, row in checked_rows.iterrows():
+                        selected_items.append({
+                            "corp_code": c_code,
+                            "corp_name": row.get("corp_name"),
+                            "rcept_no": row.get("rcept_no"),
+                            "report_nm": row.get("report_nm")
+                        })
+                        
+        st.write(f"선택된 보고서 개수: **{len(selected_items)}** 개")
+        
+        # 다운로드 시작 버튼 및 진행률 표시를 위한 레이아웃
+        col_btn, col_status = st.columns([1, 2])
+        
+        with col_btn:
+            btn_disabled = len(selected_items) == 0
+            start_download = st.button(
+                "🚀 원문 일괄 다운로드 시작",
+                use_container_width=True,
+                disabled=btn_disabled,
+                type="primary",
+                key="xml_batch_download_btn"
+            )
+            
+        status_placeholder = col_status.empty()
+        
+        if start_download:
+            status_placeholder.info("⏳ 다운로드 준비 중...")
+            try:
+                # 1. 루트 폴더에 "temp" 폴더 생성
+                TEMP_DIR = os.path.join(SCRIPT_DIR, "temp")
+                import shutil
+                if os.path.exists(TEMP_DIR):
+                    try:
+                        shutil.rmtree(TEMP_DIR)
+                    except Exception:
+                        for filename in os.listdir(TEMP_DIR):
+                            file_path = os.path.join(TEMP_DIR, filename)
+                            try:
+                                if os.path.isfile(file_path) or os.path.islink(file_path):
+                                    os.unlink(file_path)
+                                elif os.path.isdir(file_path):
+                                    shutil.rmtree(file_path)
+                            except Exception:
+                                pass
+                os.makedirs(TEMP_DIR, exist_ok=True)
+                
+                # 2. 체크된 보고서 원본 다운로드 수행
+                total_count = len(selected_items)
+                for idx, item in enumerate(selected_items):
+                    c_name = item["corp_name"]
+                    r_name = item["report_nm"]
+                    rcp_no = item["rcept_no"]
+                    
+                    status_placeholder.info(f"⏳ [{idx + 1}/{total_count}] {c_name} - {r_name} 다운로드 중...")
+                    
+                    safe_c_name = _safe_filename(c_name)
+                    safe_r_name = _safe_filename(r_name)
+                    filename = f"{safe_c_name}_{safe_r_name}_{rcp_no}.zip"
+                    file_save_path = os.path.join(TEMP_DIR, filename)
+                    
+                    # search_dart_corp의 download_original_document 호출
+                    download_original_document(
+                        rcept_no=rcp_no,
+                        save_path=file_save_path,
+                        api_key=st.session_state.api_key or None
+                    )
+                
+                # 3. zip 파일로 압축
+                status_placeholder.info("📦 ZIP 파일 결합 압축 진행 중...")
+                import zipfile
+                final_zip_path = os.path.join(SCRIPT_DIR, "original_documents_batch.zip")
+                if os.path.exists(final_zip_path):
+                    try:
+                        os.remove(final_zip_path)
+                    except Exception:
+                        pass
+                        
+                with zipfile.ZipFile(final_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for root_dir, _, files in os.walk(TEMP_DIR):
+                        for file in files:
+                            file_path = os.path.join(root_dir, file)
+                            zipf.write(file_path, os.path.relpath(file_path, TEMP_DIR))
+                
+                st.session_state.xml_batch_zip_path = final_zip_path
+                status_placeholder.success("✅ 일괄 다운로드 및 압축 성공!")
+                st.rerun()
+            except Exception as err:
+                status_placeholder.error(f"❌ 다운로드 오류 발생: {err}")
+                
+        # 최종 zip파일 웹 브라우저 다운로드 버튼 노출
+        if st.session_state.get("xml_batch_zip_path") and os.path.isfile(st.session_state.xml_batch_zip_path):
+            st.markdown("#### 🎁 다운로드 준비 완료")
+            with open(st.session_state.xml_batch_zip_path, "rb") as f:
+                st.download_button(
+                    label="💾 압축파일 다운로드 (original_documents_batch.zip)",
+                    data=f.read(),
+                    file_name="original_documents_batch.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                )
 
 # ---------------------------------------------------------------------------
-# 탭 3 — 일괄 다운로드 (핵심 기능)
+# 탭 3 — 일괄 추출
 # ---------------------------------------------------------------------------
 
 def _render_tab_batch():
-    st.markdown("### ⬇️ 재무제표 일괄 다운로드")
+    st.markdown("### ⬇️ 재무제표 일괄 추출")
 
     corps = st.session_state.selected_corps
     if not corps:
@@ -525,15 +650,8 @@ def _render_tab_batch():
             format_func=lambda v: "한국어" if v == "ko" else "English",
             key="batch_lang",
         )
-        save_dir_input = st.text_input(
-            "저장 폴더명",
-            value=DEFAULT_SAVE_DIR,
-            key="batch_save_dir",
-            help="스크립트 위치 기준 하위 폴더명 (예: fsdata, output 등)",
-        )
-        # 스크립트 위치 기준 절대경로로 변환
-        save_dir = os.path.join(SCRIPT_DIR, save_dir_input)
-        st.caption(f"📁 저장 경로: `{save_dir}`")
+        # 기본 저장 경로 고정 (루트 폴더 내 fsdata)
+        save_dir = os.path.join(SCRIPT_DIR, DEFAULT_SAVE_DIR)
 
     st.divider()
 
@@ -545,24 +663,11 @@ def _render_tab_batch():
 
     st.divider()
 
-    # --- 저장 폴더 존재 확인 ---
-    dir_exists = os.path.isdir(save_dir)
-    if not dir_exists:
-        st.warning(f"📂 저장 폴더가 존재하지 않습니다: `{save_dir}`")
-        if st.button("📁 폴더 생성", key="create_dir_btn"):
-            try:
-                os.makedirs(save_dir, exist_ok=True)
-                st.success(f"폴더 생성 완료: `{save_dir}`")
-                st.rerun()
-            except Exception as e:
-                st.error(f"폴더 생성 실패: {e}")
-
     # --- 일괄 추출 실행 ---
     if st.button(
         "🚀 일괄 추출 시작",
         use_container_width=True,
         type="primary",
-        disabled=not dir_exists,
     ):
         _run_batch_extract(
             corps=corps,
@@ -620,7 +725,6 @@ def _run_batch_extract(
 
     progress_bar = st.progress(0, text="준비 중…")
     status_area = st.empty()
-    log_area = st.container()
 
     set_api_key(st.session_state.api_key or None)
 
@@ -680,8 +784,6 @@ def _run_batch_extract(
             fail_count += 1
 
         logs.append(msg)
-        with log_area:
-            st.markdown(msg)
 
     # 완료
     progress_bar.progress(1.0, text="완료!")
@@ -690,7 +792,6 @@ def _run_batch_extract(
     summary = f"### 📊 일괄 추출 완료\n\n"
     summary += f"- **성공**: {success_count}건\n"
     summary += f"- **실패/건너뜀**: {fail_count}건\n"
-    summary += f"- **저장 폴더**: `{os.path.abspath(save_dir)}`\n"
 
     status_area.success(summary)
     st.session_state.batch_logs = logs
@@ -728,17 +829,17 @@ def main():
         """,
         unsafe_allow_html=True,
     )
-    st.title("📊 DART 재무제표 일괄 다운로드")
-    st.caption("search_dart_corp.py 기반 · 여러 기업의 재무제표를 한 번에 검색·추출·저장합니다.")
+    st.title("📊 DART 공시정보 검색 / 재무제표 추출")
+    st.caption("Dart Open API를 활용 · 여러 기업의 공시자료 / 재무제표를 한 번에 검색·추출·저장합니다.")
 
     # --- 사이드바 ---
     _render_sidebar()
 
     # --- 메인 탭 ---
     tab1, tab2, tab3 = st.tabs([
-        "📋 선택 기업 관리",
-        "📊 공시정보 조회",
-        "⬇️ 일괄 다운로드",
+        "📋 검색대상 기업 선택",
+        "📊 공시정보 원본 조회",
+        "⬇️ 재무제표 일괄 추출",
     ])
 
     with tab1:
@@ -752,7 +853,7 @@ def main():
 
     # --- 푸터 ---
     st.divider()
-    st.caption("DART OpenAPI · dart-fss · Streamlit")
+    st.caption("thx to DART OpenAPI · dart-fss · Streamlit")
 
 
 if __name__ == "__main__":

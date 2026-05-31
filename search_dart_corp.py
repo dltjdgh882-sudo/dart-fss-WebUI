@@ -169,6 +169,8 @@ def get_available_financial_reports(
     end_de: Optional[str] = None,
     api_key: Optional[str] = None,
     report_type: Optional[str] = None,
+    page_count: int = 100,
+    pblntf_ty: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     기업의 재무보고서 목록을 조회합니다.
@@ -189,6 +191,10 @@ def get_available_financial_reports(
         Open DART API 키. 미지정시 기본값 사용
     report_type : str, 선택사항
         보고서 유형 필터. 예) 'a001' (사업보고서), 'a002' (반기), 'a003' (분기)
+    page_count : int, 선택사항
+        최대 검색 건수 (기본값: 100)
+    pblntf_ty : str, 선택사항
+        공시유형 필터. 예) 'A' (정기공시), 'B' (주요사항보고) 등
         
     반환값:
     --------
@@ -197,11 +203,13 @@ def get_available_financial_reports(
     """
     corp = get_corp_object(corp_code, api_key=api_key)
     
-    search_kwargs = {'bgn_de': bgn_de}
+    search_kwargs = {'bgn_de': bgn_de, 'page_count': page_count}
     if end_de:
         search_kwargs['end_de'] = end_de
     if report_type:
         search_kwargs['pblntf_detail_ty'] = report_type
+    if pblntf_ty:
+        search_kwargs['pblntf_ty'] = pblntf_ty
     
     reports = corp.search_filings(**search_kwargs)
     
