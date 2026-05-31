@@ -806,7 +806,7 @@ def main():
     _init_session()
 
     st.set_page_config(
-        page_title="DART 재무제표 일괄 다운로드",
+        page_title="DART 공시정보 검색 / 재무제표 추출",
         page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded",
