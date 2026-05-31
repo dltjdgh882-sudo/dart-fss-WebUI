@@ -817,20 +817,37 @@ def main():
         """
         <style>
         .block-container { padding-top: 1.5rem; }
-        [data-testid="stSidebar"] { min-width: 410px; width: 410px; }
-        /* 사이드바 접기(collapse) 버튼 숨김 — 항상 표시 */
-        button[kind="headerNoPadding"],
-        [data-testid="stSidebar"] button[data-testid="stBaseButton-headerNoPadding"],
+        
+        /* 사이드바가 펼쳐져 있을 때만 너비 고정 (기본값 410px 유지) */
+        section[data-testid="stSidebar"][data-collapsed="false"] {
+            min-width: 410px;
+            width: 410px;
+        }
+        
+        /* 사이드바 접기 버튼이 마우스 호버 여부와 상관없이 항상 보이도록 설정 */
+        [data-testid="stSidebar"] button[data-testid*="headerNoPadding"],
+        [data-testid="stSidebar"] button[kind="headerNoPadding"],
+        [data-testid="stSidebar"] button[class*="headerNoPadding"],
+        [data-testid="stSidebar"] [data-testid="stSidebarCollapseButton"] {
+            opacity: 1 !important;
+            visibility: visible !important;
+        }
+        
+        /* 사이드바 펼치기 버튼도 항상 선명하게 표시 */
         [data-testid="collapsedControl"] {
-            display: none !important;
-            visibility: hidden !important;
+            opacity: 1 !important;
+            visibility: visible !important;
         }
         </style>
         """,
         unsafe_allow_html=True,
     )
     st.title("📊 DART 공시정보 검색 / 재무제표 추출")
-    st.caption("Dart Open API를 활용 · 여러 기업의 공시자료 / 재무제표를 한 번에 검색·추출·저장합니다.")
+    st.caption(
+        "Dart Open API를 활용 · 여러 기업의 공시자료 / 재무제표를 한 번에 검색·추출·저장합니다.  \n"
+        "최초 1회 검색시, 업데이트를 위해 잠시 응답이 없을 수 있습니다.  \n"
+        "사용량 초과로 오류발생시 금융감독원 OpenDART시스템에서 개인용 API키를 발급받아 입력하시기 바랍니다."
+    )
 
     # --- 사이드바 ---
     _render_sidebar()
