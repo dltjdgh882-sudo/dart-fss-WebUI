@@ -818,10 +818,10 @@ def main():
         <style>
         .block-container { padding-top: 1.5rem; }
         
-        /* 사이드바가 펼쳐져 있을 때만 너비 고정 (기본값 410px 유지) */
+        /* 사이드바가 펼쳐져 있을 때만 너비 고정 (기본값 450px 유지) */
         section[data-testid="stSidebar"][data-collapsed="false"] {
-            min-width: 410px;
-            width: 410px;
+            min-width: 450px;
+            width: 450px;
         }
         
         /* 사이드바 접기 버튼이 마우스 호버 여부와 상관없이 항상 보이도록 설정 */
