@@ -1,6 +1,7 @@
 # 📊 DART 재무제표 일괄 다운로드 서비스 (Streamlit)
 
 이 프로젝트는 **DART OpenAPI**와 **dart-fss** 라이브러리를 활용하여, 여러 기업의 공시정보를 실시간으로 조회하고 지정한 유형의 재무제표(BS, IS, CIS, CF)를 일괄 추출하여 엑셀 파일로 저장 및 다운로드할 수 있는 웹 어플리케이션입니다.
+
 스트림릿 링크 : https://dart-fss-webui.streamlit.app/
 
 ---
