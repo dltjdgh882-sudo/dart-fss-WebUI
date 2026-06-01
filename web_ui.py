@@ -2,7 +2,7 @@
 =============================================================================
 DART 기업 공시정보 일괄 검색 / 다운로드 Web UI  (Streamlit)
 =============================================================================
-search_dart_corp.py 를 import 하여 GUI 환경에서 다음 기능을 제공합니다.
+DART_OpenAPI.py 를 import 하여 GUI 환경에서 다음 기능을 제공합니다.
 
   1. 기업 검색 & 선택  – 키워드 검색 → 결과에서 체크 → 선택 목록에 추가
   2. 공시정보 조회      – 선택 기업들의 재무보고서 목록 일괄 조회
@@ -38,9 +38,9 @@ except Exception:
         raise
 
 # ---------------------------------------------------------------------------
-# search_dart_corp.py 의 함수 import
+# DART_OpenAPI.py 의 함수 import
 # ---------------------------------------------------------------------------
-from search_dart_corp import (
+from DART_OpenAPI import (
     DEFAULT_API_KEY,
     download_corp_list,
     extract_financial_statement,
@@ -457,7 +457,7 @@ def _render_tab_reports():
                     # 1. 뷰어 바로가기 오른쪽에 체크박스 열(선택) 추가
                     df["선택"] = False
                     
-                    st.markdown("#### 📂 공시 목록 및 원문 다운로드 선택")
+                    st.markdown("#### 📂 공시정보 뷰어 조회 및 원본 다운로드")
                     
                     # 데이터프레임 컬럼 시각화 커스텀 설정 (표 내부에 클릭 뷰어 삽입 및 체크박스 열 추가)
                     column_config = {
@@ -489,7 +489,7 @@ def _render_tab_reports():
                     # 세션에 편집 정보 저장
                     st.session_state.selected_reports_by_corp[code] = edited_df
 
-        # --- 공시정보 원문(XML) 일괄 다운로드 영역 ---
+        # --- 공시정보 원본(XML) 일괄 다운로드 영역 ---
         st.divider()
         st.markdown("### 📥 공시정보 원문(XML) 일괄 다운로드")
         st.caption("위의 공시 목록 표에서 **'선택'** 체크박스를 체크한 보고서들의 원문(XML) ZIP 파일들을 한 번에 일괄 다운로드하여 하나의 ZIP 파일로 결합합니다.")
@@ -560,7 +560,7 @@ def _render_tab_reports():
                     filename = f"{safe_c_name}_{safe_r_name}_{rcp_no}.zip"
                     file_save_path = os.path.join(TEMP_DIR, filename)
                     
-                    # search_dart_corp의 download_original_document 호출
+                    # DART_OpenAPI의 download_original_document 호출
                     download_original_document(
                         rcept_no=rcp_no,
                         save_path=file_save_path,
