@@ -826,9 +826,9 @@ def main():
     st.markdown(
         """
         <style>
-        /* 전체 폰트 크기를 90% 수준으로 축소 */
+        /* 전체 폰트 크기를 95% 수준으로 축소 */
         html, body, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            font-size: 90% !important;
+            font-size: 95% !important;
         }
 
         .block-container { padding-top: 1.5rem; }
