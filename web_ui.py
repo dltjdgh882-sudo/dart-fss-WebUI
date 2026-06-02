@@ -321,14 +321,14 @@ def _render_sidebar():
             # 스크롤 가능한 컨테이너
             with st.container(height=320):
                 # 헤더
-                h1, h2, h3 = st.columns([2, 3, 1])
+                h1, h2, h3 = st.columns([1.2, 3.8, 1])
                 h1.markdown("**기업코드**")
-                h2.markdown("**기업명** *(클릭→추가)*")
+                h2.markdown("**기업명**")
                 h3.markdown("**선택**")
 
                 for corp in state.search_results:
-                    c1, c2, c3 = st.columns([2, 3, 1])
-                    c1.code(corp["corp_code"], language=None)
+                    c1, c2, c3 = st.columns([1.2, 3.8, 1])
+                    c1.markdown(f"`{corp['corp_code']}`")
                     # 기업명 클릭 시 즉시 추가
                     if c2.button(
                         corp["corp_name"],
@@ -417,7 +417,7 @@ def _render_tab_selected():
 
     # 기업 목록 테이블 헤더 추가
     st.divider()
-    h_name, h_code, h_stock, h_cls, h_del = st.columns([3, 2, 2, 1, 1])
+    h_name, h_code, h_stock, h_cls, h_del = st.columns([3, 1.8, 1.8, 1.2, 1], gap="small")
     h_name.markdown("**🏢 기업명**")
     h_code.markdown("**🔑 DART 코드**")
     h_stock.markdown("**📈 종목코드**")
@@ -428,11 +428,11 @@ def _render_tab_selected():
     # 기업 목록 테이블 데이터 행
     for idx, corp in enumerate(corps):
         col_name, col_code, col_stock, col_cls, col_del = st.columns(
-            [3, 2, 2, 1, 1]
+            [3, 1.8, 1.8, 1.2, 1], gap="small"
         )
         col_name.markdown(f"**{corp['corp_name']}**")
-        col_code.code(corp["corp_code"])
-        col_stock.write(corp.get("stock_code") or "—")
+        col_code.markdown(f"`{corp['corp_code']}`")
+        col_stock.markdown(f"`{corp.get('stock_code') or '—'}`")
         # 시장구분 코드 변환 (Y->KSP, K->KDQ, N->KNX, E->ETC)
         raw_cls = corp.get("corp_cls") or ""
         cls_mapping = {"Y": "KSP", "K": "KDQ", "N": "KNX", "E": "ETC"}
