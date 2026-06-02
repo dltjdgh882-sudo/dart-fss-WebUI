@@ -1,105 +1,3 @@
-import argparse
-import json
-import os
-import re
-import sys
-from typing import Any, Dict, List, Optional
-
-# Import dart-fss (Open DART wrapper). If missing, attempt automatic installation.
-try:
-    import dart_fss as dart
-except Exception:
-    # Avoid top-level import errors; try to install the package automatically.
-    print('dart-fss package not found. Attempting to install dart-fss...', file=sys.stderr)
-    try:
-        import subprocess
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'dart-fss>=0.4.16'])
-        # import after install
-        import importlib
-        dart = importlib.import_module('dart_fss')
-        print('dart-fss installed successfully.', file=sys.stderr)
-    except Exception as _err:
-        print('Automatic installation failed. Please install manually and re-run:', file=sys.stderr)
-        print('  pip install -r requirements.txt', file=sys.stderr)
-        print('or', file=sys.stderr)
-        print('  pip install dart-fss', file=sys.stderr)
-        print(f'Error detail: {_err}', file=sys.stderr)
-        sys.exit(1)
-
-# Check for Excel writer dependency used when saving to Excel (openpyxl)
-try:
-    import openpyxl  # type: ignore
-except Exception:
-    try:
-        print('openpyxl not found. Attempting to install openpyxl...', file=sys.stderr)
-        import subprocess
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'openpyxl'])
-        import importlib
-        importlib.import_module('openpyxl')
-        print('openpyxl installed successfully.', file=sys.stderr)
-    except Exception as _err:
-        print('Could not install openpyxl automatically. --save-excel may fail.', file=sys.stderr)
-        print('Install manually with: pip install openpyxl', file=sys.stderr)
-
-# ---------------------------------------------------------------------------
-# dart-fss FinancialStatement.save method monkey-patch
-# ---------------------------------------------------------------------------
-def _patched_save(self, filename: str = None, path: str = None, include_labels: bool = False, strip_prefix: bool = True):
-    """
-    Patched version of dart-fss FinancialStatement.save to customize sheet saving.
-    By default, it excludes Labels_ sheets and removes the 'Data_' prefix from the sheet names for cleaner output.
-    """
-    import os
-    import pandas as pd
-    import openpyxl.styles
-    from dart_fss.utils import create_folder
-    from openpyxl.utils import get_column_letter
-
-    if path is None:
-        path = os.getcwd()
-        path = os.path.join(path, "fsdata")
-        create_folder(path)
-
-    if filename is None:
-        filename = '{}_{}.xlsx'.format(self.info.get('corp_code'), self.info.get('report_tp'))
-
-    file_path = os.path.join(path, filename)
-    with pd.ExcelWriter(file_path) as writer:
-        infodf = pd.DataFrame({"info": self.info})
-        infodf.to_excel(writer, sheet_name="info")
-        for tp in self._statements:
-            fs = self._statements[tp]
-            if fs is not None:
-                sheet_name = tp if strip_prefix else "Data_" + tp
-                fs.to_excel(writer, sheet_name=sheet_name)
-                
-                # Apply custom styles to yearly numeric columns
-                ws = writer.sheets[sheet_name]
-                num_idx_levels = fs.index.nlevels
-                for col_idx, col_name in enumerate(fs.columns):
-                    col_level_0 = col_name[0] if isinstance(col_name, tuple) else col_name
-                    if isinstance(col_level_0, str) and any(c.isdigit() for c in col_level_0) and all(c.isdigit() or c in '-./ ' for c in col_level_0):
-                        excel_col_idx = col_idx + 1 + num_idx_levels
-                        col_letter = get_column_letter(excel_col_idx)
-                        
-                        # 1. Set column width to 20
-                        ws.column_dimensions[col_letter].width = 20
-                        
-                        # 2. Set number formats
-                        start_row = fs.columns.nlevels + 1
-                        for row in range(start_row, ws.max_row + 1):
-                            cell = ws.cell(row=row, column=excel_col_idx)
-                            cell.number_format = r'_-* #,##0_-;-* #,##0_-;_-* "-"_-;_-@_-'
-                
-                if include_labels:
-                    label_sheet_name = "Labels_" + tp
-                    label = self._labels[tp]
-                    label.to_excel(writer, sheet_name=label_sheet_name)
-    return file_path
-
-if hasattr(dart, 'fs') and hasattr(dart.fs, 'FinancialStatement'):
-    dart.fs.FinancialStatement.save = _patched_save
-
 """
 =============================================================================
 DART 기업 정보 및 재무제표 검색 도구 (DART Corporation & Financial Statement Search Tool)
@@ -122,12 +20,140 @@ DART 기업 정보 및 재무제표 검색 도구 (DART Corporation & Financial 
 =============================================================================
 """
 
+import argparse
+import json
+import os
+import re
+import sys
+from typing import Any, Dict, List, Optional
+
+# Global variable for dart_fss module
+dart = None
+
+try:
+    import dart_fss as imported_dart
+    dart = imported_dart
+except ImportError:
+    pass
+
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# FinancialStatementExporter class - Exporter Pattern
+# ---------------------------------------------------------------------------
+class FinancialStatementExporter:
+    """
+    추출된 FinancialStatement 객체를 커스텀 서식과 스타일이 입혀진
+    엑셀 파일 등으로 정교하게 변환하여 저장하는 내보내기 도구 클래스입니다.
+    """
+    def __init__(self, financial_statement):
+        self.statement = financial_statement
+
+    def save(self, file_path: str, include_labels: bool = False, strip_prefix: bool = True) -> str:
+        """
+        재무제표 데이터를 커스텀 스타일이 입혀진 엑셀 파일로 저장합니다.
+        """
+        import os
+        import pandas as pd
+        import openpyxl.styles
+        from openpyxl.utils import get_column_letter
+
+        # file_path의 폴더가 존재하지 않는 경우 생성
+        dir_name = os.path.dirname(file_path)
+        if dir_name:
+            os.makedirs(dir_name, exist_ok=True)
+
+        with pd.ExcelWriter(file_path) as writer:
+            # 1. 회사 기본 정보 저장
+            info_df = pd.DataFrame({"info": self.statement.info})
+            info_df.to_excel(writer, sheet_name="info")
+            
+            # 2. 재무제표 종류별로 시트 저장
+            for tp in self.statement._statements:
+                fs_df = self.statement._statements[tp]
+                if fs_df is not None:
+                    sheet_name = tp if strip_prefix else "Data_" + tp
+                    fs_df.to_excel(writer, sheet_name=sheet_name)
+                    
+                    # 3. 년도별 수치 컬럼에 커스텀 스타일 및 쉼표 서식 적용
+                    ws = writer.sheets[sheet_name]
+                    num_idx_levels = fs_df.index.nlevels
+                    for col_idx, col_name in enumerate(fs_df.columns):
+                        col_level_0 = col_name[0] if isinstance(col_name, tuple) else col_name
+                        if isinstance(col_level_0, str) and any(c.isdigit() for c in col_level_0) and all(c.isdigit() or c in '-./ ' for c in col_level_0):
+                            excel_col_idx = col_idx + 1 + num_idx_levels
+                            col_letter = get_column_letter(excel_col_idx)
+                            
+                            # 열 너비 고정(20)
+                            ws.column_dimensions[col_letter].width = 20
+                            
+                            # 회계 쉼표 서식 적용
+                            start_row = fs_df.columns.nlevels + 1
+                            for row in range(start_row, ws.max_row + 1):
+                                cell = ws.cell(row=row, column=excel_col_idx)
+                                cell.number_format = r'_-* #,##0_-;-* #,##0_-;_-* "-"_-;_-@_-'
+                    
+                    # 4. 계정명 매핑용 Labels 시트 선택적 저장
+                    if include_labels:
+                        label_sheet_name = "Labels_" + tp
+                        label_df = self.statement._labels[tp]
+                        label_df.to_excel(writer, sheet_name=label_sheet_name)
+                        
+        return file_path
+
+
+def initialize_environment(force_check: bool = False):
+    """
+    애플리케이션 구동에 필요한 패키지 정합성을 검증하고 환경을 초기화합니다.
+    """
+    global dart
+    if dart is not None and not force_check:
+        return
+
+    # 1. dart-fss 패키지 확인 및 동적 설치
+    try:
+        import dart_fss as imported_dart
+        dart = imported_dart
+    except ImportError:
+        print('dart-fss package not found. Attempting to install dart-fss...', file=sys.stderr)
+        try:
+            import subprocess
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'dart-fss>=0.4.16'])
+            import importlib
+            dart = importlib.import_module('dart_fss')
+            print('dart-fss installed successfully.', file=sys.stderr)
+        except Exception as _err:
+            print('Automatic installation failed. Please install manually and re-run:', file=sys.stderr)
+            print('  pip install -r requirements.txt', file=sys.stderr)
+            print('or', file=sys.stderr)
+            print('  pip install dart-fss', file=sys.stderr)
+            print(f'Error detail: {_err}', file=sys.stderr)
+            sys.exit(1)
+
+    # 2. openpyxl 패키지 확인 및 동적 설치
+    try:
+        import openpyxl  # type: ignore
+    except ImportError:
+        try:
+            print('openpyxl not found. Attempting to install openpyxl...', file=sys.stderr)
+            import subprocess
+            subprocess.check_call([sys.executable, '-m', 'pip', 'install', 'openpyxl'])
+            import importlib
+            importlib.import_module('openpyxl')
+            print('openpyxl installed successfully.', file=sys.stderr)
+        except Exception as _err:
+            print('Could not install openpyxl automatically. --save-excel may fail.', file=sys.stderr)
+            print('Install manually with: pip install openpyxl', file=sys.stderr)
+
+
 # 기본 Open DART API 키 (환경변수 DART_API_KEY 또는 --apikey로 재정의 가능)
 DEFAULT_API_KEY = 'a494746598d98ab710d7d4a4da14a8936497bd8c'
 CACHE_FILE_NAME = 'corp_list_cache.json'
 
 
 def set_api_key(api_key: Optional[str] = None):
+    global dart
+    if dart is None:
+        initialize_environment()
     api_key = api_key or os.environ.get('DART_API_KEY') or DEFAULT_API_KEY
     if not api_key:
         raise ValueError(
@@ -224,12 +250,12 @@ def get_corp_object(corp_code: str, api_key: Optional[str] = None):
 
 def get_available_financial_reports(
     corp_code: str,
-    bgn_de: str,
-    end_de: Optional[str] = None,
+    start_date: str,
+    end_date: Optional[str] = None,
     api_key: Optional[str] = None,
     report_type: Optional[str] = None,
     page_count: int = 100,
-    pblntf_ty: Optional[str] = None,
+    disclosure_type: Optional[str] = None,
 ) -> List[Dict[str, str]]:
     """
     기업의 재무보고서 목록을 조회합니다.
@@ -239,12 +265,12 @@ def get_available_financial_reports(
     -----------
     corp_code : str
         DART 기업코드 (8자리)
-    bgn_de : str
+    start_date : str
         검색 시작일자 (YYYYMMDD 형식)
     
     선택 인자:
     -----------
-    end_de : str, 선택사항
+    end_date : str, 선택사항
         검색 종료일자 (YYYYMMDD 형식). 지정하지 않으면 오늘 기준
     api_key : str, 선택사항
         Open DART API 키. 미지정시 기본값 사용
@@ -252,7 +278,7 @@ def get_available_financial_reports(
         보고서 유형 필터. 예) 'a001' (사업보고서), 'a002' (반기), 'a003' (분기)
     page_count : int, 선택사항
         최대 검색 건수 (기본값: 100)
-    pblntf_ty : str, 선택사항
+    disclosure_type : str, 선택사항
         공시유형 필터. 예) 'A' (정기공시), 'B' (주요사항보고) 등
         
     반환값:
@@ -262,13 +288,13 @@ def get_available_financial_reports(
     """
     corp = get_corp_object(corp_code, api_key=api_key)
     
-    search_kwargs = {'bgn_de': bgn_de, 'page_count': page_count}
-    if end_de:
-        search_kwargs['end_de'] = end_de
+    search_kwargs = {'bgn_de': start_date, 'page_count': page_count}
+    if end_date:
+        search_kwargs['end_de'] = end_date
     if report_type:
         search_kwargs['pblntf_detail_ty'] = report_type
-    if pblntf_ty:
-        search_kwargs['pblntf_ty'] = pblntf_ty
+    if disclosure_type:
+        search_kwargs['pblntf_ty'] = disclosure_type
     
     reports = corp.search_filings(**search_kwargs)
     
@@ -297,11 +323,11 @@ def get_available_financial_reports(
 
 def extract_financial_statement(
     corp_code: str,
-    bgn_de: str,
-    end_de: Optional[str] = None,
-    fs_tp: tuple = ('bs', 'is', 'cis', 'cf'),
+    start_date: str,
+    end_date: Optional[str] = None,
+    financial_statement_types: tuple = ('bs', 'is', 'cis', 'cf'),
     separate: bool = False,
-    report_tp: str = 'annual',
+    report_type: str = 'annual',
     lang: str = 'ko',
     separator: bool = True,
     dataset: str = 'xbrl',
@@ -316,14 +342,14 @@ def extract_financial_statement(
     -----------
     corp_code : str
         DART 기업코드 (8자리)
-    bgn_de : str
+    start_date : str
         검색 시작일자 (YYYYMMDD 형식)
     
     선택 인자:
     -----------
-    end_de : str, 선택사항
+    end_date : str, 선택사항
         검색 종료일자 (YYYYMMDD 형식). 지정하지 않으면 오늘 기준
-    fs_tp : tuple of str, 선택사항
+    financial_statement_types : tuple of str, 선택사항
         추출할 재무제표 유형 (쉼표로 구분):
         'bs'  = 재무상태표 (Balance Sheet)
         'is'  = 손익계산서 (Income Statement)
@@ -332,7 +358,7 @@ def extract_financial_statement(
         기본값: ('bs', 'is', 'cis', 'cf')
     separate : bool, 선택사항
         True면 개별재무제표, False면 연결재무제표 (기본값: False)
-    report_tp : str, 선택사항
+    report_type : str, 선택사항
         보고서 유형: 'annual' (연간), 'half' (반기), 'quarter' (분기)
     lang : str, 선택사항
         언어: 'ko' (한글, 기본값), 'en' (영문)
@@ -351,11 +377,11 @@ def extract_financial_statement(
     corp = get_corp_object(corp_code, api_key=api_key)
     
     fs = corp.extract_fs(
-        bgn_de=bgn_de,
-        end_de=end_de,
-        fs_tp=fs_tp,
+        bgn_de=start_date,
+        end_de=end_date,
+        fs_tp=financial_statement_types,
         separate=separate,
-        report_tp=report_tp,
+        report_tp=report_type,
         lang=lang,
         separator=separator,
         dataset=dataset,
@@ -442,6 +468,160 @@ def print_corp_summary(corp: Dict[str, Optional[str]]):
     print('---')
     for key, value in corp.items():
         print(f'{key}: {value}')
+
+
+class DocumentBatchService:
+    """
+    DART 공시보고서 원본 다운로드 및 재무제표 일괄 추출 등의
+    복합적인 비즈니스 로직을 제공하는 서비스 클래스입니다.
+    """
+    def __init__(self, api_key: Optional[str] = None):
+        self.api_key = api_key
+
+    def download_and_compress_reports(
+        self,
+        selected_items: List[Dict[str, Any]],
+        base_dir: str,
+        progress_callback=None
+    ) -> str:
+        """
+        선택된 여러 공시 보고서를 개별 다운로드한 뒤 하나의 ZIP 파일로 결합하여 저장하고,
+        생성된 최종 ZIP 파일의 경로를 반환합니다.
+        
+        progress_callback: (current_idx, total_count, message) 형식으로 진행률을 전달하는 콜백
+        """
+        import shutil
+        import zipfile
+
+        temp_dir = os.path.join(base_dir, "temp")
+        if os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                for filename in os.listdir(temp_dir):
+                    file_path = os.path.join(temp_dir, filename)
+                    try:
+                        if os.path.isfile(file_path) or os.path.islink(file_path):
+                            os.unlink(file_path)
+                        elif os.path.isdir(file_path):
+                            shutil.rmtree(file_path)
+                    except Exception:
+                        pass
+        os.makedirs(temp_dir, exist_ok=True)
+
+        total_count = len(selected_items)
+        for idx, item in enumerate(selected_items):
+            c_name = item["corp_name"]
+            r_name = item["report_nm"]
+            rcp_no = item["rcept_no"]
+
+            if progress_callback:
+                progress_callback(idx, total_count, f"⏳ {c_name} - {r_name} 다운로드 중...")
+
+            safe_c_name = re.sub(r'[\\/*?:"<>|]', "_", c_name).strip()
+            safe_r_name = re.sub(r'[\\/*?:"<>|]', "_", r_name).strip()
+            filename = f"{safe_c_name}_{safe_r_name}_{rcp_no}.zip"
+            file_save_path = os.path.join(temp_dir, filename)
+
+            download_original_document(
+                rcept_no=rcp_no,
+                save_path=file_save_path,
+                api_key=self.api_key
+            )
+
+        if progress_callback:
+            progress_callback(total_count, total_count, "📦 ZIP 파일 결합 압축 진행 중...")
+
+        final_zip_path = os.path.join(base_dir, "original_documents_batch.zip")
+        if os.path.exists(final_zip_path):
+            try:
+                os.remove(final_zip_path)
+            except Exception:
+                pass
+
+        with zipfile.ZipFile(final_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for root_dir, _, files in os.walk(temp_dir):
+                for file in files:
+                    file_path = os.path.join(root_dir, file)
+                    zipf.write(file_path, os.path.relpath(file_path, temp_dir))
+
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+
+        return final_zip_path
+
+    def run_batch_extract(
+        self,
+        corps: List[Dict[str, Any]],
+        financial_statement_types: tuple,
+        report_type: str,
+        separate: bool,
+        start_date: str,
+        end_date: str,
+        lang: str,
+        save_dir: str,
+        progress_callback=None
+    ) -> List[Tuple[str, str, str]]:
+        """
+        여러 기업의 재무제표를 순차적으로 추출하여 엑셀 파일로 저장하고,
+        각각의 실행 결과 로그(상태 메시지, 표시명, 저장경로)를 반환합니다.
+        
+        progress_callback: (current_idx, total_count, message) 형식으로 진행률을 전달하는 콜백
+        """
+        import pandas as pd
+        os.makedirs(save_dir, exist_ok=True)
+        results = []  # List[Tuple[message, display_name, file_path]]
+
+        total = len(corps)
+        for i, corp in enumerate(corps):
+            code = corp["corp_code"]
+            name = corp["corp_name"]
+
+            if progress_callback:
+                progress_callback(i, total, f"⏳ **{name}** ({code}) 추출 중...")
+
+            try:
+                fs = extract_financial_statement(
+                    corp_code=code,
+                    start_date=start_date,
+                    end_date=end_date if end_date else None,
+                    financial_statement_types=financial_statement_types,
+                    separate=separate,
+                    report_type=report_type,
+                    lang=lang,
+                    api_key=self.api_key,
+                )
+
+                safe_name = re.sub(r'[\\/*?:"<>|]', "_", name).strip()
+                filename = f"{safe_name}_{code}.xlsx"
+                filepath = os.path.join(save_dir, filename)
+
+                if fs is not None and hasattr(fs, "_statements"):
+                    exporter = FinancialStatementExporter(fs)
+                    exporter.save(filepath)
+                    msg = f"✅ **{name}** → `{filepath}`"
+                    results.append((msg, f"{name} ({code})", filepath))
+                elif fs is not None:
+                    if isinstance(fs, pd.DataFrame):
+                        fs.to_excel(filepath, index=False)
+                        msg = f"✅ **{name}** → `{filepath}` (DataFrame)"
+                        results.append((msg, f"{name} ({code})", filepath))
+                    else:
+                        msg = f"⚠️ **{name}** — 추출 완료, 저장 불가 (Exporter 미지원)"
+                        results.append((msg, "", ""))
+                else:
+                    msg = f"⚠️ **{name}** — 추출 결과가 비어있습니다."
+                    results.append((msg, "", ""))
+            except Exception as err:
+                msg = f"❌ **{name}** — 오류: {err}"
+                results.append((msg, "", ""))
+
+        if progress_callback:
+            progress_callback(total, total, "완료!")
+
+        return results
 
 
 def main():
@@ -585,20 +765,21 @@ def main():
                 args.corp_code,
                 args.bgn_de,
                 args.end_de,
-                fs_tp=fs_types,
+                financial_statement_types=fs_types,
                 separate=args.separate,
-                report_tp=args.report_type,
+                report_type=args.report_type,
                 api_key=args.apikey,
             )
             
             print(f'\n완료: 기업코드 {args.corp_code}의 재무제표를 성공적으로 추출했습니다.')
             
             if args.save_excel:
-                if hasattr(fs, 'save'):
-                    fs.save(args.save_excel, include_labels=args.include_labels)
+                if fs is not None and hasattr(fs, "_statements"):
+                    exporter = FinancialStatementExporter(fs)
+                    exporter.save(args.save_excel, include_labels=args.include_labels)
                     print(f'엑셀 저장: {args.save_excel}')
                 else:
-                    raise TypeError('추출된 재무제표 객체에 save() 메서드가 없습니다.')
+                    raise TypeError('추출된 재무제표가 유효하지 않거나 비어있습니다.')
             else:
                 print('팁: --save-excel <파일경로> 옵션으로 엑셀 파일로 저장할 수 있습니다.')
             
